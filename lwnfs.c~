@@ -1,0 +1,176 @@
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <asm/atomic.h>
+#include <asm/uaccess.h>
+
+// Adaptacao do codigo do : Jonathan Corbet
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("GDZ");
+
+#define LFS_MAGIC 0xBEBACAFE
+
+
+#define NCOUNTERS 4
+static atomic_t counters[NCOUNTERS];
+
+
+// Operacoes com os arquivos
+static int lfs_open(struct inode *inode, struct file *filp);
+static ssize_t lfs_read_file(struct file *filp, char *buf, size_t count, loff_t *offset);
+static ssize_t lfs_write_file(struct file *filp, const char *buf, size_t count, loff_t *offset);
+
+// configuracoes
+static int lfs_fill_super (struct super_block *sb, void *data, int silent);
+
+/*-----------------------------
+*	OPERACOES
+-------------------------------*/
+
+/*
+ * Abrindo um arquivo..
+ */
+
+static int lfs_open(struct inode *inode, struct file *filp)
+{
+	if (inode->i_ino > NCOUNTERS)
+		return -ENODEV;  /* Should never happen.  */
+	filp->private_data = counters + inode->i_ino - 1;
+	return 0;
+}
+
+
+#define TMPSIZE 20
+/*
+ * Lendo um arquivo
+ */
+static ssize_t lfs_read_file(struct file *filp, char *buf,
+		size_t count, loff_t *offset)
+{
+	int v, len;
+	char tmp[TMPSIZE];
+	atomic_t *counter = (atomic_t *) filp->private_data;
+	
+	// encodificando o valor
+	v = atomic_read(counter);
+	if (*offset > 0)
+		v -= 1;
+	else
+		atomic_inc(counter);
+	len = snprintf(tmp, TMPSIZE, "%d\n", v);
+	if (*offset > len)
+		return 0;
+	if (count > len - *offset)
+		count = len - *offset;
+
+	// copia de volta e aumenta o offset
+	if (copy_to_user(buf, tmp + *offset, count))
+		return -EFAULT;
+	*offset += count;
+	return count;
+}
+
+/*
+ * Escrevendo em um arquivo
+ */
+static ssize_t lfs_write_file(struct file *filp, const char *buf,
+		size_t count, loff_t *offset)
+{
+	char tmp[TMPSIZE];
+	atomic_t *counter = (atomic_t *) filp->private_data;
+	// iniciando a escrita a partir do inicio
+	if (*offset != 0)
+		return -EINVAL;
+	// lendo o valor
+	if (count >= TMPSIZE)
+		return -EINVAL;
+	memset(tmp, 0, TMPSIZE);
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+	
+	// guardando o valor no counter
+	atomic_set(counter, simple_strtol(tmp, NULL, 10));
+	return count;
+}
+
+
+// Adicionando as operacoes sobre arquivos na estrutura de dados
+
+static struct file_operations lfs_file_ops = {
+	.open	= lfs_open,
+	.read 	= lfs_read_file,
+	.write  = lfs_write_file,
+};
+
+
+
+
+// Criando 4 arquivos e exportando-os
+struct tree_descr OurFiles[] = {
+	{ NULL, NULL, 0 },
+	{ .name = "Arquivo0",
+	  .ops = &lfs_file_ops,
+	  .mode = S_IWUSR|S_IRUGO },
+	{ .name = "Arquivo1",
+	  .ops = &lfs_file_ops,
+	  .mode = S_IWUSR|S_IRUGO },
+	{ .name = "Arquivo2",
+	  .ops = &lfs_file_ops,
+	  .mode = S_IWUSR|S_IRUGO },
+	{ .name = "Arquivo3",
+	  .ops = &lfs_file_ops,
+	  .mode = S_IWUSR|S_IRUGO },
+	{ "", NULL, 0 }
+};
+
+
+
+// Configurando o superbloco
+
+// Preenchendo o superbloco com os arquivos exportados acima
+static int lfs_fill_super (struct super_block *sb, void *data, int silent)
+{
+	return simple_fill_super(sb, LFS_MAGIC, OurFiles);
+}
+
+
+// passando o ponteiro da funcao que preenche o superbloco e registrando o sistema de arquivos
+static struct dentry *lfs_get_super(struct file_system_type *fst,
+		int flags, const char *devname, void *data)
+{
+	return mount_bdev(fst, flags, devname, data, lfs_fill_super);	
+}
+
+// tipo de sistema de arquivos
+static struct file_system_type lfs_type = {
+	.owner 		= THIS_MODULE,
+	.name		= "lwnfs",
+	.mount		= lfs_get_super,
+	.kill_sb	= kill_litter_super,
+};
+
+
+
+
+// De fato iniciando o modulo
+static int __init lfs_init(void)
+{
+	int i;
+
+	for (i = 0; i < NCOUNTERS; i++)
+		atomic_set(counters + i, 0);
+	return register_filesystem(&lfs_type);
+}
+
+// tirando o registro do sistema de arquivos e terminando o modulo
+static void __exit lfs_exit(void)
+{
+	unregister_filesystem(&lfs_type);
+}
+
+module_init(lfs_init);
+module_exit(lfs_exit);
+        
+

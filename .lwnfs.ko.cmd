@@ -1,0 +1,1 @@
+cmd_/home/osoza/Documentos/SO-filesystem/lwnfs.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /home/osoza/Documentos/SO-filesystem/lwnfs.ko /home/osoza/Documentos/SO-filesystem/lwnfs.o /home/osoza/Documentos/SO-filesystem/lwnfs.mod.o
